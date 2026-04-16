@@ -434,13 +434,15 @@ class Qwen3VLMoeForConditionalGeneration(
 
             # register buffer for deepstack
             if self.use_deepstack:
-                self.deepstack_input_embeds = [
+                deepstack_input_embeds = [
                     torch.zeros(
                         vllm_config.scheduler_config.max_num_batched_tokens,
                         config.text_config.hidden_size,
                     )
                     for _ in range(self.deepstack_num_level)
                 ]
+                for idx, tensor in enumerate(deepstack_input_embeds):
+                    self.register_buffer(self._b(idx), tensor)
 
         with self._mark_language_model(vllm_config):
             self.language_model = Qwen3MoeLLMForCausalLM(

@@ -1621,6 +1621,11 @@ class Qwen3VLForConditionalGeneration(
 
         raise ValueError("Only image or video modality is supported")
 
+    @classmethod
+    def _b(cls, idx: int) -> str:
+        """Return buffer name for deepstack input embeddings."""
+        return f"deepstack_input_embeds_{idx}"
+
     def __init__(self, *, vllm_config: VllmConfig, prefix: str = "model"):
         super().__init__()
         config: Qwen3VLConfig = vllm_config.model_config.hf_config
@@ -1655,13 +1660,15 @@ class Qwen3VLForConditionalGeneration(
 
             # register buffer for deepstack
             if self.use_deepstack:
-                self.deepstack_input_embeds = [
+                deepstack_input_embeds = [
                     torch.zeros(
                         vllm_config.scheduler_config.max_num_batched_tokens,
                         config.text_config.hidden_size,
                     )
                     for _ in range(self.deepstack_num_level)
                 ]
+                for idx, tensor in enumerate(deepstack_input_embeds):
+                    self.register_buffer(self._b(idx), tensor)
 
         with self._mark_language_model(vllm_config):
             self.language_model = Qwen3LLMForCausalLM(
@@ -1693,7 +1700,7 @@ class Qwen3VLForConditionalGeneration(
         # get deepstack_input_embeds from buffer, and clear the buffer
         return IntermediateTensors(
             {
-                f"deepstack_input_embeds_{idx}": self.deepstack_input_embeds[idx][
+                f"deepstack_input_embeds_{idx}": self.get_buffer(self._b(idx))[
                     :num_tokens
                 ]
                 for idx in range(self.deepstack_num_level)
@@ -1706,20 +1713,20 @@ class Qwen3VLForConditionalGeneration(
 
         # set deepstack_input_embeds to buffer
         num_tokens = deepstack_input_embeds.size(1)
-        if num_tokens > self.deepstack_input_embeds[0].size(0):
-            self.deepstack_input_embeds = [
-                torch.zeros(
+        if num_tokens > self.get_buffer(self._b(0)).size(0):
+            for idx in range(self.deepstack_num_level):
+                old_buffer = self.get_buffer(self._b(idx))
+                new_buffer = torch.zeros(
                     num_tokens,
                     self.config.text_config.hidden_size,
-                    device=self.deepstack_input_embeds[0].device,
-                    dtype=self.deepstack_input_embeds[0].dtype,
+                    device=old_buffer.device,
+                    dtype=old_buffer.dtype,
                 )
-                for _ in range(self.deepstack_num_level)
-            ]
+            self.register_buffer(self._b(idx), new_buffer)
+
         for idx in range(self.deepstack_num_level):
-            self.deepstack_input_embeds[idx][:num_tokens].copy_(
-                deepstack_input_embeds[idx]
-            )
+            buffer = self.get_buffer(self._b(idx))
+            buffer[:num_tokens].copy_(deepstack_input_embeds[idx])
 
     def _clear_deepstack_input_embeds(self, num_tokens: int) -> None:
         if not getattr(self, "deepstack_input_embeds", None):
@@ -1728,7 +1735,7 @@ class Qwen3VLForConditionalGeneration(
         # clear deepstack_input_embeds in buffer
         if num_tokens > 0:
             for idx in range(self.deepstack_num_level):
-                self.deepstack_input_embeds[idx][:num_tokens].zero_()
+                self.get_buffer(self._b(idx))[:num_tokens].zero_()
 
     # -- SupportsEncoderCudaGraph protocol methods --
 
