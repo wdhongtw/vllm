@@ -54,6 +54,7 @@ from .qwen3_moe import (
     Qwen3MoeSparseMoeBlock,
 )
 from .qwen3_vl import (
+    _deepstack_name,
     Qwen3_VisionTransformer,
     Qwen3VLDummyInputsBuilder,
     Qwen3VLForConditionalGeneration,
@@ -434,13 +435,15 @@ class Qwen3VLMoeForConditionalGeneration(
 
             # register buffer for deepstack
             if self.use_deepstack:
-                self.deepstack_input_embeds = [
+                deepstack_input_embeds = [
                     torch.zeros(
                         vllm_config.scheduler_config.max_num_batched_tokens,
                         config.text_config.hidden_size,
                     )
                     for _ in range(self.deepstack_num_level)
                 ]
+                for idx, tensor in enumerate(deepstack_input_embeds):
+                    self.register_buffer(_deepstack_name(idx), tensor, persistent=False)
 
         with self._mark_language_model(vllm_config):
             self.language_model = Qwen3MoeLLMForCausalLM(
