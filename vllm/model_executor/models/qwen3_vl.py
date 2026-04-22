@@ -779,10 +779,7 @@ class Qwen3_VisionTransformer(nn.Module):
         hidden_states = self.patch_embed(hidden_states)
 
         if encoder_metadata is None:
-            if isinstance(grid_thw, list):
-                grid_thw_list = grid_thw
-            else:
-                grid_thw_list = grid_thw.tolist()
+            grid_thw_list = grid_thw
             encoder_metadata = self.prepare_encoder_metadata(grid_thw_list)
 
         pos_embeds = encoder_metadata["pos_embeds"]
@@ -1976,7 +1973,14 @@ class Qwen3VLForConditionalGeneration(
                     self.visual, pixel_values, grid_thw.tolist(), rope_type="rope_3d"
                 )
             else:
-                image_embeds = self.visual(pixel_values, grid_thw=grid_thw)
+
+                def to_tuple(lst: list) -> tuple:
+                    return tuple(to_tuple(i) if isinstance(i, list) else i for i in lst)
+
+                image_embeds = self.visual(
+                    pixel_values,
+                    grid_thw=to_tuple(grid_thw.tolist()),
+                )
 
         # Split concatenated embeddings for each image item.
         merge_size = self.visual.spatial_merge_size
