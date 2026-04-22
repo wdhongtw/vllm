@@ -416,7 +416,10 @@ class Qwen3VLMoeForConditionalGeneration(
             multimodal_config.is_multimodal_pruning_enabled()
         )
 
-        self.use_deepstack = hasattr(config.vision_config, "deepstack_visual_indexes")
+        self.use_deepstack = (
+            hasattr(config.vision_config, "deepstack_visual_indexes")
+            and len(config.vision_config.deepstack_visual_indexes) > 0
+        )
         self.deepstack_num_level = (
             len(config.vision_config.deepstack_visual_indexes)
             if self.use_deepstack
