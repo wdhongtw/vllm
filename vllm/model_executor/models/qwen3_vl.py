@@ -1969,13 +1969,38 @@ class Qwen3VLForConditionalGeneration(
                     self.visual, pixel_values, grid_thw.tolist(), rope_type="rope_3d"
                 )
             else:
+                MAX_BATCH_SIZE = 8
                 encoder_metadata = self.visual.prepare_encoder_metadata(
                     grid_thw.tolist(),
+                    max_batch_size=MAX_BATCH_SIZE,
                 )
+                import torch.nn.functional as F
+
+                size = pixel_values.size(0)
+                next_two = lambda v: 1 << (v - 1).bit_length()
+                aligned_size = next_two(size)
+                padded = aligned_size - size
+                pad_batch = lambda v: F.pad(v, (0, 0, 0, padded))
+
+                pixel_values = pad_batch(pixel_values)
+                encoder_metadata["pos_embeds"] = pad_batch(
+                    encoder_metadata["pos_embeds"],
+                )
+                encoder_metadata["rotary_pos_emb_cos"] = pad_batch(
+                    encoder_metadata["rotary_pos_emb_cos"],
+                )
+                encoder_metadata["rotary_pos_emb_sin"] = pad_batch(
+                    encoder_metadata["rotary_pos_emb_sin"],
+                )
+
                 image_embeds = self.visual(
                     pixel_values,
                     encoder_metadata=encoder_metadata,
                 )
+
+                merge_factor = self.visual.spatial_merge_size**2
+                assert size % merge_factor == 0
+                image_embeds = image_embeds[: size // merge_factor]
 
         # Split concatenated embeddings for each image item.
         merge_size = self.visual.spatial_merge_size
