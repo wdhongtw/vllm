@@ -655,7 +655,8 @@ class Qwen3_VisionTransformer(nn.Module):
             else self.rot_pos_ids(h, w, self.spatial_merge_size).repeat(t, 1)
             for t, h, w in grid_thw
         ]
-        pos_ids = torch.cat(pos_ids, dim=0).to(self.device, non_blocking=True)
+        host = torch.device("cpu")
+        pos_ids = torch.cat(pos_ids, dim=0).to(host, non_blocking=True)
 
         # Use pre-computed cos_sin_cache from RotaryEmbedding
         cos, sin = self.rotary_pos_emb.get_cos_sin(max_grid_size)
@@ -670,10 +671,11 @@ class Qwen3_VisionTransformer(nn.Module):
             triton_pos_embed_interpolate if HAS_TRITON else pos_embed_interpolate_native
         )
         outputs = []
+        host = torch.device("cpu")
         for t, h, w in grid_thw:
             outputs.append(
                 interpolate_fn(
-                    self.pos_embed.weight,
+                    self.pos_embed.weight.to(device=host),
                     t,
                     h,
                     w,
@@ -709,6 +711,7 @@ class Qwen3_VisionTransformer(nn.Module):
         if device is None:
             device = self.device
 
+        host = torch.device("cpu")
         metadata: dict[str, torch.Tensor | None] = {}
 
         # Positional embeddings
@@ -742,7 +745,7 @@ class Qwen3_VisionTransformer(nn.Module):
 
         # sequence_lengths (backend-specific)
         metadata["sequence_lengths"] = MMEncoderAttention.maybe_compute_seq_lens(
-            self.attn_backend, cu_seqlens, device
+            self.attn_backend, cu_seqlens, host
         )
 
         # max_seqlen
@@ -758,7 +761,7 @@ class Qwen3_VisionTransformer(nn.Module):
         metadata["max_seqlen"] = torch.tensor(
             max_seqlen_val,
             dtype=torch.int32,
-            device=device,
+            device=host,
         )
 
         # Recompute cu_seqlens (backend-specific transformation)
@@ -767,7 +770,7 @@ class Qwen3_VisionTransformer(nn.Module):
             cu_seqlens,
             self.hidden_size,
             self.tp_size,
-            device,
+            host,
         )
 
         return metadata
@@ -1970,11 +1973,19 @@ class Qwen3VLForConditionalGeneration(
                 )
             else:
                 MAX_BATCH_SIZE = 8
+                host, accelerator = torch.device("cpu"), pixel_values.device
+
+                import torch.nn.functional as F
+
+                pixel_values = pixel_values.to(device=host)
+
+                # with torchax.disable_temporarily():
+
                 encoder_metadata = self.visual.prepare_encoder_metadata(
                     grid_thw.tolist(),
                     max_batch_size=MAX_BATCH_SIZE,
+                    # device=torch.device("cpu"),
                 )
-                import torch.nn.functional as F
 
                 size = pixel_values.size(0)
                 next_two = lambda v: 1 << (v - 1).bit_length()
@@ -1993,10 +2004,19 @@ class Qwen3VLForConditionalGeneration(
                     encoder_metadata["rotary_pos_emb_sin"],
                 )
 
+                def to_dev(v: torch.Tensor | None) -> torch.Tensor | None:
+                    if v is None:
+                        return v
+                    return v.to(device=accelerator)
+
+                pixel_values = to_dev(pixel_values)
+                encoder_metadata = {k: to_dev(v) for k, v in encoder_metadata.items()}
+
                 image_embeds = self.visual(
                     pixel_values,
                     encoder_metadata=encoder_metadata,
                 )
+                image_embeds = image_embeds.to(device=host)
 
                 merge_factor = self.visual.spatial_merge_size**2
                 assert size % merge_factor == 0
