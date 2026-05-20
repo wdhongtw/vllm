@@ -207,9 +207,6 @@ class SimpleMockViTModel(torch.nn.Module):
     def get_encoder_cudagraph_config(self) -> EncoderCudaGraphConfig:
         return EncoderCudaGraphConfig(
             modalities=["image"],
-            input_key_by_modality={
-                "image": "pixel_values",
-            },
             buffer_keys=["dummy_buf"],
             out_hidden_size=_HIDDEN,
         )
@@ -294,11 +291,10 @@ class SimpleMockViTModel(torch.nn.Module):
         n_out = _count_output_tokens(grid_config, _SPATIAL_MERGE)
         dummy_buf = torch.zeros(n_out, _HIDDEN, device=device, dtype=dtype)
         return EncoderCudaGraphCaptureInputs(
-            mm_kwargs={
+            values={
                 "pixel_values": dummy_pixel_values,
-                "image_grid_thw": grid_config,
+                "dummy_buf": dummy_buf,
             },
-            buffers={"dummy_buf": dummy_buf},
         )
 
     def prepare_encoder_cudagraph_replay_buffers(
@@ -311,14 +307,16 @@ class SimpleMockViTModel(torch.nn.Module):
         n_out = _count_output_tokens(grid_thw, _SPATIAL_MERGE)
         p = next(self.parameters())
         dummy_buf = torch.zeros(n_out, _HIDDEN, device=p.device, dtype=p.dtype)
-        return EncoderCudaGraphReplayBuffers(buffers={"dummy_buf": dummy_buf})
+        return EncoderCudaGraphReplayBuffers(values={
+            "pixel_values": mm_kwargs["pixel_values"],
+            "dummy_buf": dummy_buf,
+        })
 
     def encoder_cudagraph_forward(
         self,
-        mm_kwargs: dict[str, Any],
-        buffers: dict[str, torch.Tensor],
+        values: dict[str, torch.Tensor],
     ) -> torch.Tensor:
-        return self._forward(mm_kwargs["pixel_values"])
+        return self._forward(values["pixel_values"])
 
     def encoder_eager_forward(
         self,
@@ -400,7 +398,7 @@ def _make_video_mm_kwargs(
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.skipif(not current_platform.is_cuda(), reason="Skip if not cuda")
+# @pytest.mark.skipif(not current_platform.is_cuda(), reason="Skip if not cuda")
 class TestEncoderCudaGraphCaptureReplay:
     def setup_method(self):
         self.device = torch.device("cuda:0")
@@ -495,10 +493,6 @@ class SimpleMockViTVideoModel(SimpleMockViTModel):
     def get_encoder_cudagraph_config(self) -> EncoderCudaGraphConfig:
         return EncoderCudaGraphConfig(
             modalities=["image", "video"],
-            input_key_by_modality={
-                "image": "pixel_values",
-                "video": "pixel_values_videos",
-            },
             buffer_keys=["dummy_buf"],
             out_hidden_size=_HIDDEN,
         )
@@ -599,11 +593,10 @@ class SimpleMockViTVideoModel(SimpleMockViTModel):
         n_out = _count_output_tokens(grid_config, _SPATIAL_MERGE)
         dummy_buf = torch.zeros(n_out, _HIDDEN, device=device, dtype=dtype)
         return EncoderCudaGraphCaptureInputs(
-            mm_kwargs={
+            values={
                 "pixel_values": dummy_pixel_values,
-                "image_grid_thw": grid_config,
+                "dummy_buf": dummy_buf,
             },
-            buffers={"dummy_buf": dummy_buf},
         )
 
     def prepare_encoder_cudagraph_replay_buffers(
@@ -615,12 +608,15 @@ class SimpleMockViTVideoModel(SimpleMockViTModel):
         n_out = _count_output_tokens(self._get_grid_thw(mm_kwargs), _SPATIAL_MERGE)
         p = next(self.parameters())
         dummy_buf = torch.zeros(n_out, _HIDDEN, device=p.device, dtype=p.dtype)
-        return EncoderCudaGraphReplayBuffers(buffers={"dummy_buf": dummy_buf})
+        return EncoderCudaGraphReplayBuffers(values={
+            "pixel_values": self._get_pixel_values(mm_kwargs),
+            "dummy_buf": dummy_buf,
+        })
 
     def encoder_cudagraph_forward(
-        self, mm_kwargs: dict[str, Any], buffers: dict[str, torch.Tensor]
+        self, values: dict[str, torch.Tensor]
     ) -> torch.Tensor:
-        return self._forward(self._get_pixel_values(mm_kwargs))
+        return self._forward(values["pixel_values"])
 
     def encoder_eager_forward(self, mm_kwargs: dict[str, Any]) -> torch.Tensor:
         return self._forward(self._get_pixel_values(mm_kwargs))
@@ -658,14 +654,6 @@ class TestGetInputModality:
         }
         assert model.get_input_modality(mm_kwargs) == "video"
 
-    def test_video_model_config_has_both_modalities(self):
-        model = SimpleMockViTVideoModel()
-        cfg = model.get_encoder_cudagraph_config()
-        assert "image" in cfg.modalities
-        assert "video" in cfg.modalities
-        assert cfg.input_key_by_modality["image"] == "pixel_values"
-        assert cfg.input_key_by_modality["video"] == "pixel_values_videos"
-
 
 # ---------------------------------------------------------------------------
 # GPU tests — video capture, replay, fallback, and mixed image+video
@@ -675,7 +663,7 @@ _VIDEO_MAX_BATCH = 4
 _VIDEO_MAX_FRAMES = 8  # 2 frames per item at max_batch_size=4
 
 
-@pytest.mark.skipif(not current_platform.is_cuda(), reason="Skip if not cuda")
+# @pytest.mark.skipif(not current_platform.is_cuda(), reason="Skip if not cuda")
 class TestEncoderCudaGraphVideoReplay:
     def setup_method(self):
         self.device = torch.device("cuda:0")
