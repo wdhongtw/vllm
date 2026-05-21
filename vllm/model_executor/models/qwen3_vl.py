@@ -2004,10 +2004,10 @@ class Qwen3VLForConditionalGeneration(
                 max_frames_per_batch=max_frames_per_batch,
             )
 
-        buffers = metadata | {
+        values = metadata | {
             'pixel_values': self._get_pixel_values_by_modality(mm_kwargs),
         }
-        return EncoderCudaGraphReplayBuffers(values=buffers)
+        return EncoderCudaGraphReplayBuffers(values=values)
 
     def encoder_cudagraph_forward(
         self,
