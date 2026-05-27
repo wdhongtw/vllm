@@ -2018,8 +2018,9 @@ class Qwen3VLForConditionalGeneration(
         mm_kwargs: dict[str, Any],
         buffers: dict[str, torch.Tensor],
     ) -> torch.Tensor:
-        pixel_values = self._get_pixel_values_by_modality(mm_kwargs)
-        grid_thw = self._get_grid_thw_by_modality(mm_kwargs)
+        if 'pixel_values' in mm_kwargs:
+            pixel_values = mm_kwargs['pixel_values']
+        grid_thw = None
         return self.visual(pixel_values, grid_thw, encoder_metadata=buffers)
 
     def encoder_eager_forward(
